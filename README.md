@@ -119,3 +119,69 @@
     )
   )
 )
+
+;; Sponsor reclamation mechanism
+(define-public (reclaim-funding-resources (funding-id uint))
+  (begin
+    (asserts! (is-valid-funding-identifier funding-id) ERR_INVALID_PARAMETERS)
+    (let
+      (
+        (funding-record (unwrap! 
+          (map-get? ImpactFundings { funding-id: funding-id }) 
+          ERR_RESOURCE_UNAVAILABLE))
+        (original-sponsor (get sponsor funding-record))
+        (committed-amount (get total-amount funding-record))
+      )
+      (asserts! (is-eq tx-sender PROTOCOL_ADMIN) ERR_PERMISSION_DENIED)
+      (asserts! (> block-height (get expiration-block funding-record)) ERR_STATE_CONSTRAINT)
+
+      (match (stx-transfer? committed-amount (as-contract tx-sender) original-sponsor)
+        success
+          (begin
+            (map-set ImpactFundings
+              { funding-id: funding-id }
+              (merge funding-record { status: "reclaimed" })
+            )
+            (ok true)
+          )
+        error ERR_TRANSACTION_FAILED
+      )
+    )
+  )
+)
+
+;; Sponsor-initiated funding cancellation
+(define-public (withdraw-impact-funding (funding-id uint))
+  (begin
+    (asserts! (is-valid-funding-identifier funding-id) ERR_INVALID_PARAMETERS)
+    (let
+      (
+        (funding-record (unwrap! 
+          (map-get? ImpactFundings { funding-id: funding-id }) 
+          ERR_RESOURCE_UNAVAILABLE))
+        (original-sponsor (get sponsor funding-record))
+        (current-amount (get total-amount funding-record))
+        (completed-milestone-count (get completed-milestones funding-record))
+        (remaining-amount (- current-amount 
+                             (* (/ current-amount (len (get milestone-targets funding-record))) 
+                                completed-milestone-count)))
+      )
+      (asserts! (is-eq tx-sender original-sponsor) ERR_PERMISSION_DENIED)
+      (asserts! (< block-height (get expiration-block funding-record)) ERR_STATE_CONSTRAINT)
+      (asserts! (is-eq (get status funding-record) "pending") ERR_STATE_CONSTRAINT)
+
+      (match (stx-transfer? remaining-amount (as-contract tx-sender) original-sponsor)
+        success
+          (begin
+            (map-set ImpactFundings
+              { funding-id: funding-id }
+              (merge funding-record { status: "cancelled" })
+            )
+            (ok true)
+          )
+        error ERR_TRANSACTION_FAILED
+      )
+    )
+  )
+)
+
